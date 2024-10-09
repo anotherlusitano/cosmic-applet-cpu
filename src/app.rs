@@ -1,53 +1,40 @@
-// SPDX-License-Identifier: GPL-3.0-only
+use std::time::Duration;
 
 use cosmic::app::{Command, Core};
 use cosmic::iced::wayland::popup::{destroy_popup, get_popup};
 use cosmic::iced::window::Id;
-use cosmic::iced::Limits;
+use cosmic::iced::{time, Limits};
 use cosmic::iced_style::application;
-use cosmic::widget::{self, settings};
+use cosmic::iced_widget::{row, Column};
+use cosmic::widget::{self};
 use cosmic::{Application, Element, Theme};
 
-use crate::fl;
+use crate::config::Config;
+use crate::cpu::{get_cpu_percentage, get_cpus, Cpu};
 
-/// This is the struct that represents your application.
-/// It is used to define the data that will be used by your application.
 #[derive(Default)]
-pub struct YourApp {
-    /// Application state which is managed by the COSMIC runtime.
+pub struct App {
     core: Core,
-    /// The popup id.
     popup: Option<Id>,
-    /// Example row toggler.
-    example_row: bool,
+    config: Config,
+    cpus: Vec<Cpu>,
 }
 
-/// This is the enum that contains all the possible variants that your application will need to transmit messages.
-/// This is used to communicate between the different parts of your application.
-/// If your application does not need to send messages, you can use an empty enum or `()`.
 #[derive(Debug, Clone)]
 pub enum Message {
     TogglePopup,
     PopupClosed(Id),
-    ToggleExampleRow(bool),
+    UpdateCpu,
 }
 
-/// Implement the `Application` trait for your application.
-/// This is where you define the behavior of your application.
-///
-/// The `Application` trait requires you to define the following types and constants:
-/// - `Executor` is the async executor that will be used to run your application's commands.
-/// - `Flags` is the data that your application needs to use before it starts.
-/// - `Message` is the enum that contains all the possible variants that your application will need to transmit messages.
-/// - `APP_ID` is the unique identifier of your application.
-impl Application for YourApp {
+impl Application for App {
     type Executor = cosmic::executor::Default;
 
     type Flags = ();
 
     type Message = Message;
 
-    const APP_ID: &'static str = "com.example.CosmicAppletTemplate";
+    const APP_ID: &'static str = "another.lusitano.AppletCpu";
 
     fn core(&self) -> &Core {
         &self.core
@@ -57,16 +44,16 @@ impl Application for YourApp {
         &mut self.core
     }
 
-    /// This is the entry point of your application, it is where you initialize your application.
-    ///
-    /// Any work that needs to be done before the application starts should be done here.
-    ///
-    /// - `core` is used to passed on for you by libcosmic to use in the core of your own application.
-    /// - `flags` is used to pass in any data that your application needs to use before it starts.
-    /// - `Command` type is used to send messages to your application. `Command::none()` can be used to send no messages to your application.
+    fn subscription(&self) -> cosmic::iced::Subscription<Self::Message> {
+        let seconds = self.config.refresh_time;
+
+        time::every(Duration::from_secs(seconds)).map(|_| Message::UpdateCpu)
+    }
+
     fn init(core: Core, _flags: Self::Flags) -> (Self, Command<Self::Message>) {
-        let app = YourApp {
+        let app = App {
             core,
+            cpus: get_cpus(),
             ..Default::default()
         };
 
@@ -77,37 +64,50 @@ impl Application for YourApp {
         Some(Message::PopupClosed(id))
     }
 
-    /// This is the main view of your application, it is the root of your widget tree.
-    ///
-    /// The `Element` type is used to represent the visual elements of your application,
-    /// it has a `Message` associated with it, which dictates what type of message it can send.
-    ///
-    /// To get a better sense of which widgets are available, check out the `widget` module.
     fn view(&self) -> Element<Self::Message> {
-        self.core
-            .applet
-            .icon_button("display-symbolic")
-            .on_press(Message::TogglePopup)
-            .into()
+        let percentage = get_cpu_percentage(&self.cpus);
+
+        let percentage = format!("{}%", percentage);
+
+        row![
+            self.core.applet.text(percentage),
+            self.core
+                .applet
+                .icon_button("utilities-system-monitor-symbolic")
+                .on_press(Message::TogglePopup)
+        ]
+        .align_items(cosmic::iced::Alignment::Center)
+        .into()
     }
 
     fn view_window(&self, _id: Id) -> Element<Self::Message> {
-        let content_list = widget::list_column()
-            .padding(5)
-            .spacing(0)
-            .add(settings::item(
-                fl!("example-row"),
-                widget::toggler(None, self.example_row, |value| {
-                    Message::ToggleExampleRow(value)
-                }),
-            ));
+        let mut cpu_list: Vec<cosmic::iced_core::Element<'_, _, _, _>> = vec![];
+        for cpu in &self.cpus {
+            let percentage = format!("{}%", cpu.usage as u8);
+            cpu_list.push(
+                widget::row()
+                    .push(
+                        widget::text(&cpu.name)
+                            .vertical_alignment(cosmic::iced::alignment::Vertical::Center)
+                            .horizontal_alignment(cosmic::iced::alignment::Horizontal::Center)
+                            .width(40),
+                    )
+                    .push(widget::progress_bar(0.0..=100.0, cpu.usage))
+                    .push(
+                        widget::text(percentage)
+                            .vertical_alignment(cosmic::iced::alignment::Vertical::Center)
+                            .horizontal_alignment(cosmic::iced::alignment::Horizontal::Center)
+                            .width(40),
+                    )
+                    .into(),
+            );
+        }
 
-        self.core.applet.popup_container(content_list).into()
+        let content = Column::with_children(cpu_list);
+
+        self.core.applet.popup_container(content).into()
     }
 
-    /// Application messages are handled here. The application state can be modified based on
-    /// what message was received. Commands may be returned for asynchronous execution on a
-    /// background thread managed by the application's executor.
     fn update(&mut self, message: Self::Message) -> Command<Self::Message> {
         match message {
             Message::TogglePopup => {
@@ -133,7 +133,9 @@ impl Application for YourApp {
                     self.popup = None;
                 }
             }
-            Message::ToggleExampleRow(toggled) => self.example_row = toggled,
+            Message::UpdateCpu => {
+                self.cpus = get_cpus();
+            }
         }
         Command::none()
     }
